@@ -1,0 +1,6 @@
+{
+  "name": "DefragFS - Terminal Defragmenter",
+  "description": "A btop-inspired terminal clicker tool and vintage disk defragmentation simulator with ASCII block rearrangement and system upgrades.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
