@@ -281,6 +281,21 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           <span>MAN</span>
         </button>
 
+        {/* GitHub Repository Star Link */}
+        <a
+          id="btn-github-repo"
+          href="https://github.com/ArtiomOganesyan/idle_defrag"
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Star idle_defrag on GitHub (https://github.com/ArtiomOganesyan/idle_defrag)"
+          className="px-1.5 sm:px-2 py-0.5 sm:py-1 rounded border transition-all hover:brightness-125 hover:border-amber-400 hover:text-amber-300 cursor-pointer flex items-center gap-1 text-[10px] sm:text-[11px] font-mono shadow-xs"
+          style={{ backgroundColor: theme.cardBg, borderColor: theme.cardBorder }}
+        >
+          <span className="text-amber-400 font-black">[*]</span>
+          <span className="font-bold">STAR</span>
+          <span className="hidden lg:inline text-zinc-400">GH</span>
+        </a>
+
         <div className="hidden 2xl:block font-mono text-[10px] text-zinc-400 ml-1 px-1 py-0.5 border rounded" style={{ borderColor: theme.cardBorder }}>
           {timeStr}
         </div>
