@@ -4,14 +4,15 @@ import {
   ClusterBlock,
   DefragHead,
   LogEntry,
+  PomodoroMode,
   UpgradeDef,
 } from './types';
 import { BLOCK_TIERS, THEMES } from './utils/themes';
 import { sound } from './utils/audio';
 import { HeaderBar } from './components/HeaderBar';
 import { DefragGrid } from './components/DefragGrid';
-import { LazyDockerSidebar } from './components/LazyDockerSidebar';
-import { ClusterLegendAndLogs } from './components/ClusterLegendAndLogs';
+import { LazyDockerSidebar, SidebarSectionKey } from './components/LazyDockerSidebar';
+import { PomodoroTimer } from './components/PomodoroTimer';
 import { HelpModal } from './components/HelpModal';
 import { FormatModal } from './components/FormatModal';
 import { TuningInfoModal } from './components/TuningInfoModal';
@@ -67,16 +68,16 @@ export const createDefaultUpgrades = (): Record<string, UpgradeDef> => ({
     unit: '1 Thread',
     shortcut: '4',
   },
-  algorithms: {
-    id: 'algorithms',
-    name: 'Buffer QuickSort',
-    tag: 'OPTIMIZER',
-    description: 'Batch sector consolidation algorithm & track completion bonus.',
-    level: 1,
+  corruption: {
+    id: 'corruption',
+    name: 'Data Corruption Rate',
+    tag: 'CORRUPTION',
+    description: 'Induces sector parity glitches and bit-rot across clusters. Higher upgrades corrupt more blocks (0-10).',
+    level: 0,
     maxLevel: 10,
-    baseCost: 150, // 2x expensive
-    costMultiplier: 1.9,
-    unit: 'Lvl 1 Buffer',
+    baseCost: 25,
+    costMultiplier: 1.55,
+    unit: '0% (Off)',
     shortcut: '5',
   },
   autoFrag: {
@@ -167,12 +168,6 @@ export default function App() {
   });
   const [isFormatModalOpen, setIsFormatModalOpen] = useState<boolean>(false);
 
-  // --- Dynamic Corruption Mechanic ---
-  const [corruptionRate, setCorruptionRate] = useState<number>(() => {
-    const saved = localStorage.getItem('defragfs_corruption_rate');
-    return saved !== null ? parseInt(saved, 10) : 1; // Default 1% corruption
-  });
-
   // --- Auto-Fragmentation (R Frag Data) Engine ---
   const [autoFragEnabled, setAutoFragEnabled] = useState<boolean>(() => {
     const saved = localStorage.getItem('defragfs_auto_frag_enabled');
@@ -196,7 +191,6 @@ export default function App() {
   const [tuningInfoOpen, setTuningInfoOpen] = useState<boolean>(false);
 
   // --- Controlled Exclusive Accordion State for Sidebar Tabs ---
-  type SidebarSectionKey = 'tuning' | 'telemetry' | 'daemon' | 'threads';
   const [activeAccordionSection, setActiveAccordionSection] = useState<SidebarSectionKey | null>('tuning');
 
   const toggleAccordionSection = (key: SidebarSectionKey) => {
@@ -204,16 +198,21 @@ export default function App() {
     sound.playBeep();
   };
 
-  // --- Controlled Accordion State for Cluster Legend & Event Logs ---
-  const [openLowerSections, setOpenLowerSections] = useState({
-    legend: true,
-    logs: true,
+  // --- Pomodoro Focus Protocol State ---
+  const [pomodoroMode, setPomodoroMode] = useState<PomodoroMode>('work');
+  const [pomodoroWorkDuration, setPomodoroWorkDuration] = useState<number>(25 * 60);
+  const [pomodoroShortBreakDuration, setPomodoroShortBreakDuration] = useState<number>(5 * 60);
+  const [pomodoroLongBreakDuration, setPomodoroLongBreakDuration] = useState<number>(15 * 60);
+  const [pomodoroTimeLeft, setPomodoroTimeLeft] = useState<number>(25 * 60);
+  const [pomodoroIsRunning, setPomodoroIsRunning] = useState<boolean>(false);
+  const [pomodoroSessionsCompleted, setPomodoroSessionsCompleted] = useState<number>(() => {
+    return parseInt(localStorage.getItem('defragfs_pomodoro_completed') || '0', 10);
+  });
+  const [pomodoroTotalFocusSeconds, setPomodoroTotalFocusSeconds] = useState<number>(() => {
+    return parseInt(localStorage.getItem('defragfs_pomodoro_focus_sec') || '0', 10);
   });
 
-  const toggleLowerSection = (key: 'legend' | 'logs') => {
-    setOpenLowerSections((prev) => ({ ...prev, [key]: !prev[key] }));
-    sound.playBeep();
-  };
+  const isPomodoroActive = pomodoroIsRunning && pomodoroMode === 'work';
 
   // --- Upgrades ---
   const [upgrades, setUpgrades] = useState<Record<string, UpgradeDef>>(() => {
@@ -225,13 +224,17 @@ export default function App() {
         const merged: Record<string, UpgradeDef> = {};
         for (const key of Object.keys(defaults)) {
           const loaded = parsed[key];
-          const lvl = loaded ? Math.min(defaults[key].maxLevel, Math.max(1, loaded.level || 1)) : defaults[key].level;
+          const minLvl = key === 'corruption' ? 0 : 1;
+          const lvl =
+            loaded !== undefined && loaded.level !== undefined
+              ? Math.min(defaults[key].maxLevel, Math.max(minLvl, loaded.level))
+              : defaults[key].level;
           let unit = defaults[key].unit;
           if (key === 'speed') unit = `${(1.0 + (lvl - 1) * 1.6).toFixed(1)} IOPS`;
           if (key === 'capacity') unit = `${INITIAL_CAPACITY + (lvl - 1) * 20} Sectors`;
           if (key === 'yield') unit = `${(1 + (lvl - 1) * (4.0 / 9)).toFixed(1)}x Mult`;
           if (key === 'heads') unit = `${lvl} Thread${lvl === 1 ? '' : 's'}`;
-          if (key === 'algorithms') unit = `Lvl ${lvl} Buffer`;
+          if (key === 'corruption') unit = lvl === 0 ? '0% (Off)' : `${lvl}% Glitch`;
           if (key === 'autoFrag') unit = `${lvl} Blk${lvl === 1 ? '' : 's'}/s`;
 
           merged[key] = {
@@ -247,6 +250,9 @@ export default function App() {
     }
     return defaults;
   });
+
+  // Dynamic Corruption Rate derived directly from the System Tuning upgrade (0-10)
+  const corruptionRate = upgrades.corruption ? upgrades.corruption.level : 0;
 
   // --- Disk Blocks ---
   const [blocks, setBlocks] = useState<ClusterBlock[]>(() => {
@@ -328,6 +334,143 @@ export default function App() {
     },
     []
   );
+
+  // --- Pomodoro Action Handlers ---
+  const handleStartPomodoro = useCallback(() => {
+    sound.playPomodoroStart();
+    setPomodoroIsRunning(true);
+    addLog('SUCCESS', 'POMO_START', `Pomodoro ${pomodoroMode.toUpperCase()} engaged. Defrag operational.`);
+  }, [pomodoroMode, addLog]);
+
+  const handlePausePomodoro = useCallback(() => {
+    sound.playBeep();
+    setPomodoroIsRunning(false);
+    addLog('WARN', 'POMO_PAUSE', 'Pomodoro timer paused. Defrag heads parked in standby.');
+  }, [addLog]);
+
+  const handleResetPomodoro = useCallback(() => {
+    sound.playBeep();
+    setPomodoroIsRunning(false);
+    const dur =
+      pomodoroMode === 'work'
+        ? pomodoroWorkDuration
+        : pomodoroMode === 'shortBreak'
+        ? pomodoroShortBreakDuration
+        : pomodoroLongBreakDuration;
+    setPomodoroTimeLeft(dur);
+    addLog('SYS', 'POMO_RESET', `Pomodoro timer reset to ${Math.floor(dur / 60)}:00.`);
+  }, [pomodoroMode, pomodoroWorkDuration, pomodoroShortBreakDuration, pomodoroLongBreakDuration, addLog]);
+
+  const handleSetPomodoroMode = useCallback(
+    (mode: PomodoroMode) => {
+      sound.playBeep();
+      setPomodoroMode(mode);
+      setPomodoroIsRunning(false);
+      const dur =
+        mode === 'work'
+          ? pomodoroWorkDuration
+          : mode === 'shortBreak'
+          ? pomodoroShortBreakDuration
+          : pomodoroLongBreakDuration;
+      setPomodoroTimeLeft(dur);
+    },
+    [pomodoroWorkDuration, pomodoroShortBreakDuration, pomodoroLongBreakDuration]
+  );
+
+  const handleSetPomodoroDuration = useCallback(
+    (seconds: number) => {
+      sound.playBeep();
+      if (pomodoroMode === 'work') setPomodoroWorkDuration(seconds);
+      else if (pomodoroMode === 'shortBreak') setPomodoroShortBreakDuration(seconds);
+      else setPomodoroLongBreakDuration(seconds);
+      setPomodoroTimeLeft(seconds);
+    },
+    [pomodoroMode]
+  );
+
+  const handleSkipPomodoro = useCallback(() => {
+    sound.playBeep();
+    if (pomodoroMode === 'work') {
+      const nextCompleted = pomodoroSessionsCompleted + 1;
+      setPomodoroSessionsCompleted(nextCompleted);
+      localStorage.setItem('defragfs_pomodoro_completed', String(nextCompleted));
+      const isLong = nextCompleted % 4 === 0;
+      const nextMode: PomodoroMode = isLong ? 'longBreak' : 'shortBreak';
+      const dur = isLong ? pomodoroLongBreakDuration : pomodoroShortBreakDuration;
+      setPomodoroMode(nextMode);
+      setPomodoroTimeLeft(dur);
+      setPomodoroIsRunning(false);
+      addLog('INFO', 'POMO_SKIP', `Advanced to ${nextMode === 'longBreak' ? 'LONG BREAK' : 'SHORT BREAK'} (${Math.floor(dur / 60)}m).`);
+    } else {
+      setPomodoroMode('work');
+      setPomodoroTimeLeft(pomodoroWorkDuration);
+      setPomodoroIsRunning(false);
+      addLog('INFO', 'POMO_SKIP', `Advanced to WORK FOCUS (${Math.floor(pomodoroWorkDuration / 60)}m).`);
+    }
+  }, [pomodoroMode, pomodoroSessionsCompleted, pomodoroWorkDuration, pomodoroShortBreakDuration, pomodoroLongBreakDuration, addLog]);
+
+  // --- Pomodoro Ticking Engine ---
+  useEffect(() => {
+    if (!pomodoroIsRunning) return;
+
+    const timer = setInterval(() => {
+      setPomodoroTimeLeft((prev) => {
+        if (prev <= 1) {
+          sound.playPomodoroFinish();
+
+          if (pomodoroMode === 'work') {
+            const nextCompleted = pomodoroSessionsCompleted + 1;
+            setPomodoroSessionsCompleted(nextCompleted);
+            localStorage.setItem('defragfs_pomodoro_completed', String(nextCompleted));
+
+            const isLong = nextCompleted % 4 === 0;
+            const nextMode: PomodoroMode = isLong ? 'longBreak' : 'shortBreak';
+            const dur = isLong ? pomodoroLongBreakDuration : pomodoroShortBreakDuration;
+
+            addLog(
+              'SUCCESS',
+              'POMO_FINISH',
+              `[P] FOCUS PROTOCOL COMPLETE! Session #${nextCompleted} finished. Defrag heads parked. Time for a ${isLong ? 'Long Break' : 'Short Break'}!`
+            );
+
+            setPomodoroMode(nextMode);
+            setPomodoroIsRunning(false);
+            return dur;
+          } else {
+            addLog(
+              'INFO',
+              'POMO_FINISH',
+              'Break session concluded. Ready for next focus session. Press START or [P] to engage defrag.'
+            );
+            setPomodoroMode('work');
+            setPomodoroIsRunning(false);
+            return pomodoroWorkDuration;
+          }
+        }
+
+        if (pomodoroMode === 'work') {
+          setPomodoroTotalFocusSeconds((s) => {
+            const next = s + 1;
+            if (next % 10 === 0) {
+              localStorage.setItem('defragfs_pomodoro_focus_sec', String(next));
+            }
+            return next;
+          });
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [
+    pomodoroIsRunning,
+    pomodoroMode,
+    pomodoroSessionsCompleted,
+    pomodoroWorkDuration,
+    pomodoroShortBreakDuration,
+    pomodoroLongBreakDuration,
+    addLog,
+  ]);
 
   // Sync sound settings
   useEffect(() => {
@@ -536,8 +679,17 @@ export default function App() {
     [yieldMultiplier]
   );
 
-  // Manual Spacebar / Read button cycle
+  // Manual Spacebar / Read button cycle (operational exclusively during active Pomodoro focus session)
   const handleManualCycle = () => {
+    if (!isPomodoroActive) {
+      sound.playGlitch();
+      addLog(
+        'WARN',
+        'POMO_STANDBY',
+        'DEFRAG INHIBITED: Heads are parked. Start the Pomodoro focus timer [P] to engage defragmentation!'
+      );
+      return;
+    }
     sound.playClick(2);
     setTotalManualClicks((c) => c + 1);
     stepDefragProcess(0);
@@ -620,6 +772,8 @@ export default function App() {
     localStorage.removeItem('defragfs_auto_frag_enabled');
     localStorage.removeItem('defragfs_auto_frag_batch');
     localStorage.removeItem('defragfs_auto_frag_interval');
+    localStorage.removeItem('defragfs_pomodoro_completed');
+    localStorage.removeItem('defragfs_pomodoro_focus_sec');
 
     const freshUpgrades = createDefaultUpgrades();
 
@@ -629,8 +783,12 @@ export default function App() {
     setTotalManualClicks(0);
     setFormatPoints(0);
     setFormatCount(0);
-    setCorruptionRate(1);
     setAutoFragEnabled(true);
+    setPomodoroSessionsCompleted(0);
+    setPomodoroTotalFocusSeconds(0);
+    setPomodoroIsRunning(false);
+    setPomodoroTimeLeft(25 * 60);
+    setPomodoroMode('work');
     setUpgrades(freshUpgrades);
     setBlocks(generateBlocks(INITIAL_CAPACITY));
     setHeads([
@@ -653,24 +811,38 @@ export default function App() {
     );
   };
 
-  // --- Feature 2: Corruption Rate Engine ---
+  // --- Feature 2: Corruption Rate Engine (Driven by System Tuning Upgrade 0-10) ---
   useEffect(() => {
     if (corruptionRate <= 0) return;
 
     const corruptionTimer = setInterval(() => {
-      // Chance of corruption based on corruptionRate % per check
-      if (Math.random() * 100 < corruptionRate * 2.5) {
+      // Chance of corruption scales with upgrade level (0-10)
+      const roll = Math.random() * 100;
+      if (roll < corruptionRate * 3.5) {
         setBlocks((prev) => {
-          const nonCorrupt = prev.filter((b) => !b.isCorrupted);
+          const nonCorrupt = prev.filter((b) => !b.isCorrupted && !b.isFree);
           if (nonCorrupt.length === 0) return prev;
 
-          const target = nonCorrupt[Math.floor(Math.random() * nonCorrupt.length)];
-          sound.playGlitch();
+          // Higher upgrade levels corrupt more sectors simultaneously
+          const countToCorrupt = corruptionRate >= 8 ? 3 : corruptionRate >= 5 ? 2 : 1;
+          const targetIds = new Set<number>();
+          for (let i = 0; i < countToCorrupt; i++) {
+            const available = nonCorrupt.filter((b) => !targetIds.has(b.id));
+            if (available.length > 0) {
+              const pick = available[Math.floor(Math.random() * available.length)];
+              targetIds.add(pick.id);
+            }
+          }
 
-          addLog('WARN', 'CORRUPT', `Cluster parity glitch at ${target.hexAddr}! Bad sector detected.`);
+          sound.playGlitch();
+          addLog(
+            'WARN',
+            'CORRUPT',
+            `Cluster parity glitch (${targetIds.size} sectors)! Tuning LVL ${corruptionRate} active.`
+          );
 
           return prev.map((b) =>
-            b.id === target.id
+            targetIds.has(b.id)
               ? {
                   ...b,
                   isCorrupted: true,
@@ -712,8 +884,18 @@ export default function App() {
   }, [autoFragEnabled, upgrades.autoFrag?.level]);
 
   // Autonomous Game Loop: runs defrag heads based on Speed upgrade + prestige boost
+  // RESTRICTION: Defragmentation operates exclusively when the Pomodoro timer is active!
   useEffect(() => {
-    if (!autoDefragActive) return;
+    if (!autoDefragActive || !isPomodoroActive) {
+      // Set heads to standby when Pomodoro is inactive
+      setHeads((prev) =>
+        prev.map((h) => ({
+          ...h,
+          status: 'IDLE',
+        }))
+      );
+      return;
+    }
 
     // Speed calculation: Level 1 = 1.0 IOPS, Level 10 = 15 IOPS, Level 25 = 45 IOPS (0.5% boost per format point)
     const speedLvl = upgrades.speed.level;
@@ -729,7 +911,7 @@ export default function App() {
     }, intervalMs);
 
     return () => clearInterval(loop);
-  }, [autoDefragActive, upgrades.speed.level, heads.length, formatPoints, stepDefragProcess]);
+  }, [autoDefragActive, isPomodoroActive, upgrades.speed.level, heads.length, formatPoints, stepDefragProcess]);
 
   // Telemetry metrics updater (IOPS & Points/sec calculation)
   useEffect(() => {
@@ -798,7 +980,7 @@ export default function App() {
       }
       if (id === 'yield') nextUnit = `${(1 + (nextLvl - 1) * (4.0 / 9)).toFixed(1)}x Mult`;
       if (id === 'heads') nextUnit = `${nextLvl} Thread${nextLvl === 1 ? '' : 's'}`;
-      if (id === 'algorithms') nextUnit = `Lvl ${nextLvl} Buffer`;
+      if (id === 'corruption') nextUnit = nextLvl === 0 ? '0% (Off)' : `${nextLvl}% Glitch`;
       if (id === 'autoFrag') nextUnit = `${nextLvl} Blk${nextLvl === 1 ? '' : 's'}/s`;
 
       return {
@@ -830,15 +1012,25 @@ export default function App() {
       } else if (e.key === '1') {
         toggleAccordionSection('tuning');
       } else if (e.key === '2') {
-        toggleAccordionSection('telemetry');
+        toggleAccordionSection('legend');
       } else if (e.key === '3') {
-        toggleAccordionSection('daemon');
+        toggleAccordionSection('logs');
       } else if (e.key === '4') {
-        toggleAccordionSection('threads');
+        toggleAccordionSection('daemon');
       } else if (e.key === '5') {
-        toggleLowerSection('legend');
-      } else if (e.key === '6') {
-        toggleLowerSection('logs');
+        toggleAccordionSection('threads');
+      } else if (e.key === 'p' || e.key === 'P') {
+        setPomodoroIsRunning((r) => {
+          const next = !r;
+          if (next) {
+            sound.playPomodoroStart();
+            addLog('SUCCESS', 'POMO_START', `Pomodoro ${pomodoroMode.toUpperCase()} engaged via hotkey [P].`);
+          } else {
+            sound.playBeep();
+            addLog('WARN', 'POMO_PAUSE', 'Pomodoro timer paused via hotkey [P].');
+          }
+          return next;
+        });
       } else if (e.key === 'r' || e.key === 'R') {
         handleInjectFrag();
       } else if (e.key === 'f' || e.key === 'F') {
@@ -902,6 +1094,13 @@ export default function App() {
         autoFragEnabled={autoFragEnabled}
         onToggleAutoFrag={() => setAutoFragEnabled((a) => !a)}
         corruptionRate={corruptionRate}
+        pomodoroTimeLeft={pomodoroTimeLeft}
+        isPomodoroActive={isPomodoroActive}
+        pomodoroIsRunning={pomodoroIsRunning}
+        onOpenPomodoro={() => {
+          setActiveAccordionSection('pomodoro');
+          sound.playBeep();
+        }}
       />
 
       {/* Main Terminal Body Bento Grid Layout (LazyDocker style with mobile optimization) */}
@@ -918,38 +1117,55 @@ export default function App() {
               onManualCycle={handleManualCycle}
               autoDefragActive={autoDefragActive}
               onToggleAutoDefrag={() => setAutoDefragActive((a) => !a)}
+              isPomodoroActive={isPomodoroActive}
             />
           </div>
 
-          {/* Lower Row: Cluster Legend & Live Terminal Event Logs Accordion */}
+          {/* Lower Row: Pomodoro Focus Timer Component */}
           <div className="h-auto lg:h-[235px] shrink-0">
-            <ClusterLegendAndLogs
+            <PomodoroTimer
               theme={currentTheme}
-              multiplier={yieldMultiplier}
-              logs={logs}
-              onClearLogs={() => setLogs([])}
-              openSections={openLowerSections}
-              onToggleSection={toggleLowerSection}
+              mode={pomodoroMode}
+              timeLeft={pomodoroTimeLeft}
+              isRunning={pomodoroIsRunning}
+              sessionsCompleted={pomodoroSessionsCompleted}
+              totalFocusSeconds={pomodoroTotalFocusSeconds}
+              workDuration={pomodoroWorkDuration}
+              shortBreakDuration={pomodoroShortBreakDuration}
+              longBreakDuration={pomodoroLongBreakDuration}
+              onStart={handleStartPomodoro}
+              onPause={handlePausePomodoro}
+              onReset={handleResetPomodoro}
+              onSkip={handleSkipPomodoro}
+              onSetMode={handleSetPomodoroMode}
+              onSetDuration={handleSetPomodoroDuration}
             />
           </div>
         </div>
 
-        {/* LazyDocker Accordion Sidebar (Displayed below map on phone/mobile, left on desktop) */}
+        {/* LazyDocker Accordion Sidebar (Contains Tuning, Legend, Logs, Daemon, Threads) */}
         <div className="order-2 lg:order-1 lg:col-span-4 h-auto lg:h-full min-h-[360px] lg:min-h-0 flex flex-col">
           <LazyDockerSidebar
             blocks={blocks}
             heads={heads}
             theme={currentTheme}
+            multiplier={yieldMultiplier}
             iops={iops}
             pointsPerSec={pointsPerSec}
             totalBlocksDefragged={totalBlocksDefragged}
             totalManualClicks={totalManualClicks}
-            iopsHistory={iopsHistory}
+            logs={logs}
+            onClearLogs={() => setLogs([])}
             upgrades={upgrades}
             points={points}
             onPurchaseUpgrade={handlePurchaseUpgrade}
             corruptionRate={corruptionRate}
-            onChangeCorruptionRate={setCorruptionRate}
+            autoFragEnabled={autoFragEnabled}
+            onToggleAutoFrag={() => setAutoFragEnabled((a) => !a)}
+            autoFragBatch={autoFragBatch}
+            onChangeAutoFragBatch={setAutoFragBatch}
+            autoFragIntervalMs={autoFragIntervalMs}
+            onChangeAutoFragInterval={setAutoFragIntervalMs}
             activeSection={activeAccordionSection}
             onToggleSection={toggleAccordionSection}
             onCloseAll={() => setActiveAccordionSection(null)}
@@ -976,13 +1192,25 @@ export default function App() {
             <strong className="text-zinc-200">[SPACE]</strong> Defrag Read
           </span>
           <span>
-            <strong className="text-zinc-200">[1-4]</strong> System & IOPS
+            <strong className="text-emerald-400">[P]</strong> Pomo Focus
           </span>
           <span>
-            <strong className="text-zinc-200">[5]</strong> Legend
+            <strong className="text-zinc-200">[1]</strong> Tuning
           </span>
           <span>
-            <strong className="text-zinc-200">[6]</strong> Logs
+            <strong className="text-zinc-200">[2]</strong> Legend
+          </span>
+          <span>
+            <strong className="text-zinc-200">[3]</strong> Logs
+          </span>
+          <span>
+            <strong className="text-zinc-200">[4]</strong> Daemon
+          </span>
+          <span>
+            <strong className="text-zinc-200">[5]</strong> Threads
+          </span>
+          <span>
+            <strong className="text-zinc-200">[A]</strong> Auto
           </span>
           <span>
             <strong className="text-zinc-200">[R]</strong> Frag

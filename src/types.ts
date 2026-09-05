@@ -1,5 +1,7 @@
 export type BlockTier = 1 | 2 | 3 | 4 | 5;
 
+export type PomodoroMode = 'work' | 'shortBreak' | 'longBreak';
+
 export interface BlockTypeConfig {
   tier: BlockTier;
   id: string;

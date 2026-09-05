@@ -1,29 +1,34 @@
-import React from 'react';
-import { ClusterBlock, DefragHead, ThemeConfig, UpgradeDef } from '../types';
+import React, { useEffect, useRef } from 'react';
+import { ClusterBlock, DefragHead, LogEntry, ThemeConfig, UpgradeDef } from '../types';
 import { BLOCK_TIERS } from '../utils/themes';
 import { sound } from '../utils/audio';
 
-export type SidebarSectionKey = 'tuning' | 'telemetry' | 'daemon' | 'threads';
+export type SidebarSectionKey = 'tuning' | 'legend' | 'logs' | 'daemon' | 'threads';
 
 interface LazyDockerSidebarProps {
-  // Telemetry & Disk state
+  // Disk state
   blocks: ClusterBlock[];
   heads: DefragHead[];
   theme: ThemeConfig;
-  iops: number;
-  pointsPerSec: number;
-  totalBlocksDefragged: number;
-  totalManualClicks: number;
-  iopsHistory: number[];
+  multiplier: number;
+  iops?: number;
+  pointsPerSec?: number;
+  totalBlocksDefragged?: number;
+  totalManualClicks?: number;
+
+  // Logs
+  logs: LogEntry[];
+  onClearLogs: () => void;
 
   // Upgrades
   upgrades: Record<string, UpgradeDef>;
   points: number;
   onPurchaseUpgrade: (id: string) => void;
 
-  // Corruption & Daemon
+  // Corruption Rate (derived from tuning)
   corruptionRate: number;
-  onChangeCorruptionRate: (rate: number) => void;
+
+  // Daemon & Auto-Frag
   autoFragEnabled: boolean;
   onToggleAutoFrag: () => void;
   autoFragBatch?: number;
@@ -31,7 +36,7 @@ interface LazyDockerSidebarProps {
   autoFragIntervalMs?: number;
   onChangeAutoFragInterval?: (intervalMs: number) => void;
 
-  // Controlled Accordion Props (Exclusive Single-Open Accordion)
+  // Controlled Accordion Props
   activeSection?: SidebarSectionKey | null;
   onToggleSection?: (key: SidebarSectionKey) => void;
   onCloseAll?: () => void;
@@ -42,49 +47,42 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
   blocks,
   heads,
   theme,
-  iops,
-  totalBlocksDefragged,
-  totalManualClicks,
-  iopsHistory,
+  multiplier,
+  logs,
+  onClearLogs,
   upgrades,
   points,
   onPurchaseUpgrade,
   corruptionRate,
-  onChangeCorruptionRate,
+  autoFragEnabled,
+  onToggleAutoFrag,
+  autoFragBatch = 3,
+  onChangeAutoFragBatch,
+  autoFragIntervalMs = 2000,
+  onChangeAutoFragInterval,
   activeSection = 'tuning',
   onToggleSection,
   onCloseAll,
   onOpenTuningInfo,
 }) => {
+  const logScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (logScrollRef.current && activeSection === 'logs') {
+      logScrollRef.current.scrollTop = logScrollRef.current.scrollHeight;
+    }
+  }, [logs, activeSection]);
+
   const toggleSection = (key: SidebarSectionKey) => {
     if (onToggleSection) {
       onToggleSection(key);
     }
   };
 
-  // Telemetry statistics
-  const totalOccupied = blocks.filter((b) => !b.isFree).length;
-  const fragmentedCount = blocks.filter((b) => !b.isFree && !b.isSorted && !b.isCorrupted).length;
-  const sortedCount = blocks.filter((b) => !b.isFree && b.isSorted && !b.isCorrupted).length;
   const corruptCount = blocks.filter((b) => b.isCorrupted).length;
-  const fragPercent = totalOccupied > 0 ? (fragmentedCount / totalOccupied) * 100 : 0;
-  const sortedPercent = totalOccupied > 0 ? (sortedCount / totalOccupied) * 100 : 100;
+  const freeCount = blocks.filter((b) => b.isFree).length;
 
-  // IOPS Sparkline
-  const sparklineChars = [' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-  const maxIops = Math.max(...iopsHistory, 10);
-  const sparklineString = iopsHistory
-    .slice(-24)
-    .map((val) => {
-      const idx = Math.min(
-        sparklineChars.length - 1,
-        Math.floor((val / maxIops) * (sparklineChars.length - 1))
-      );
-      return sparklineChars[idx];
-    })
-    .join('');
-
-  // Tier distribution
+  // Tier distribution on disk
   const tierDistribution: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
   blocks.forEach((b) => {
     if (!b.isFree && !b.isCorrupted) {
@@ -109,11 +107,30 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
     return '█'.repeat(filled) + '░'.repeat(empty);
   };
 
-  // Define ordered keys for the 6 upgrade cards
-  const upgradeKeys = ['speed', 'capacity', 'yield', 'heads', 'algorithms', 'autoFrag'];
+  // Define ordered keys for the 6 upgrade cards: Speed, Capacity, Yield, Heads, Corruption (0-10), AutoFrag
+  const upgradeKeys = ['speed', 'capacity', 'yield', 'heads', 'corruption', 'autoFrag'];
   const upgradeList: UpgradeDef[] = upgradeKeys
     .map((k) => upgrades[k])
     .filter(Boolean);
+
+  const getBadgeColor = (level: LogEntry['level']) => {
+    switch (level) {
+      case 'SUCCESS':
+        return 'text-emerald-400 border-emerald-800 bg-emerald-950/40';
+      case 'WARN':
+        return 'text-amber-400 border-amber-800 bg-amber-950/40';
+      case 'IO':
+        return 'text-cyan-400 border-cyan-800 bg-cyan-950/40';
+      case 'SYS':
+        return 'text-purple-400 border-purple-800 bg-purple-950/40';
+      case 'CORRUPT':
+        return 'text-rose-400 border-rose-800 bg-rose-950/40';
+      case 'FORMAT':
+        return 'text-pink-400 border-pink-800 bg-pink-950/40';
+      default:
+        return 'text-zinc-400 border-zinc-700 bg-zinc-900/40';
+    }
+  };
 
   return (
     <div
@@ -144,11 +161,12 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
 
         {/* Quick tab switcher buttons */}
         <div className="flex items-center gap-1 shrink-0">
-          {(['tuning', 'telemetry', 'daemon', 'threads'] as SidebarSectionKey[]).map((sec, idx) => {
+          {(['tuning', 'legend', 'logs', 'daemon', 'threads'] as SidebarSectionKey[]).map((sec, idx) => {
             const isActive = activeSection === sec;
             const labels: Record<SidebarSectionKey, string> = {
               tuning: 'TUN',
-              telemetry: 'IOPS',
+              legend: 'LEG',
+              logs: 'LOG',
               daemon: 'DAEM',
               threads: 'THRD',
             };
@@ -163,7 +181,7 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
                     : 'border-zinc-700 text-zinc-400 hover:text-zinc-200 bg-zinc-900/60'
                 }`}
               >
-                [{idx + 1}]
+                [{idx + 1}] {labels[sec]}
               </button>
             );
           })}
@@ -207,116 +225,109 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
                 {activeSection === 'tuning' ? '▼' : '▶'}
               </span>
               <span className="text-zinc-100 font-bold tracking-tight">
-                <span className="text-emerald-400 mr-1">[1]</span>SYSTEM_TUNING
+                <span className="text-emerald-400 mr-1">[1]</span>SYSTEM_TUNING_UPGRADES
               </span>
             </button>
 
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  sound.playBeep();
-                  if (onOpenTuningInfo) onOpenTuningInfo();
-                }}
-                title="View System Tuning Specifications & Formulas"
-                className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-cyan-950/80 border border-cyan-500/60 text-cyan-300 hover:bg-cyan-900 hover:text-white hover:border-cyan-400 transition-colors cursor-pointer flex items-center gap-1 shadow-xs"
-              >
-                <span>?</span>
-                <span className="hidden sm:inline text-[9px]">INFO</span>
-              </button>
-              <span className="text-[10px] sm:text-[11px] px-1.5 py-0.2 rounded bg-black/40 text-emerald-400 border border-emerald-800 font-mono">
-                6 CARDS
+            <div className="flex items-center gap-1.5">
+              {onOpenTuningInfo && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    sound.playBeep();
+                    onOpenTuningInfo();
+                  }}
+                  title="Open detailed Tuning Specifications Directory"
+                  className="px-1.5 py-0.2 rounded text-[10px] sm:text-[11px] font-bold border border-cyan-500/50 text-cyan-300 bg-cyan-950/40 hover:bg-cyan-900/60 hover:border-cyan-400 cursor-pointer transition-all flex items-center gap-1 shadow-xs"
+                >
+                  <span>ⓘ SPECS</span>
+                </button>
+              )}
+              <span className="text-[10px] sm:text-[11px] px-1.5 py-0.2 rounded bg-black/40 text-emerald-400 border border-zinc-700 font-mono">
+                6 UPGRADES
               </span>
             </div>
           </div>
 
-          {/* Body: 6 Upgrade Cards */}
+          {/* Body: Upgrades Cards */}
           {activeSection === 'tuning' && (
-            <div className="p-2 sm:p-2.5 flex flex-col gap-2 bg-black/20 overflow-y-auto custom-scrollbar max-h-[380px] sm:max-h-[460px] lg:max-h-[420px] xl:max-h-[480px]">
-              <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono px-0.5 shrink-0 sticky top-0 bg-[#0c0e14]/90 backdrop-blur-xs py-0.5 z-10">
-                <div className="flex items-center gap-1.5">
-                  <span>TUNING MATRIX (6 CARDS)</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      sound.playBeep();
-                      if (onOpenTuningInfo) onOpenTuningInfo();
-                    }}
-                    title="View card descriptions"
-                    className="text-cyan-400 hover:text-cyan-200 underline cursor-pointer text-[9.5px]"
-                  >
-                    [?] Specs
-                  </button>
-                </div>
-                <span className="text-emerald-400">
-                  {upgradeList.filter((u) => u.level >= u.maxLevel).length}/{upgradeList.length} MAXED
-                </span>
-              </div>
-
-              {/* 6 Cards Grid (Responsive 2-Columns on wide, 1-Column on compact) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-2.5">
+            <div className="p-2 sm:p-2.5 flex flex-col gap-2 bg-black/20">
+              <div className="grid grid-cols-1 gap-2">
                 {upgradeList.map((upg, idx) => {
                   const cost = calculateCost(upg);
-                  const isMaxed = upg.level >= upg.maxLevel;
-                  const canAfford = points >= cost && !isMaxed;
+                  const isMax = upg.level >= upg.maxLevel;
+                  const canAfford = points >= cost && !isMax;
 
                   return (
                     <div
                       key={upg.id}
-                      id={`upgrade-card-${upg.id}`}
-                      className="p-2 sm:p-2.5 rounded border flex flex-col justify-between gap-2 shadow-xs transition-all duration-150 relative overflow-hidden"
+                      className="p-2 rounded border transition-all flex flex-col gap-1.5 shadow-sm"
                       style={{
-                        backgroundColor: 'rgba(0,0,0,0.45)',
-                        borderColor: isMaxed
-                          ? 'rgba(234, 179, 8, 0.4)'
-                          : canAfford
-                          ? 'rgba(52, 211, 153, 0.35)'
-                          : 'rgba(255,255,255,0.08)',
+                        backgroundColor: 'rgba(0,0,0,0.3)',
+                        borderColor: canAfford ? 'rgba(52, 211, 153, 0.3)' : 'rgba(255,255,255,0.06)',
                       }}
                     >
-                      {/* Top Row: Tag & Level */}
+                      {/* Top Row: Tag, Name & Level Badge */}
                       <div className="flex items-center justify-between gap-1">
                         <div className="flex items-center gap-1.5 truncate">
-                          <span className="text-[9px] sm:text-[10px] font-bold px-1.5 py-0.2 rounded-xs bg-zinc-800 border border-zinc-700 text-cyan-300 font-mono">
+                          <span
+                            className="text-[9px] sm:text-[10px] font-extrabold px-1.5 py-0.2 rounded border uppercase tracking-wider"
+                            style={{
+                              borderColor:
+                                upg.id === 'corruption'
+                                  ? 'rgba(244, 63, 94, 0.4)'
+                                  : upg.id === 'speed'
+                                  ? 'rgba(52, 211, 153, 0.4)'
+                                  : upg.id === 'capacity'
+                                  ? 'rgba(56, 189, 248, 0.4)'
+                                  : upg.id === 'yield'
+                                  ? 'rgba(251, 191, 36, 0.4)'
+                                  : upg.id === 'heads'
+                                  ? 'rgba(192, 132, 252, 0.4)'
+                                  : 'rgba(248, 113, 113, 0.4)',
+                              color:
+                                upg.id === 'corruption'
+                                  ? '#fb7185'
+                                  : upg.id === 'speed'
+                                  ? '#34d399'
+                                  : upg.id === 'capacity'
+                                  ? '#38bdf8'
+                                  : upg.id === 'yield'
+                                  ? '#fbbf24'
+                                  : upg.id === 'heads'
+                                  ? '#c084fc'
+                                  : '#f87171',
+                              backgroundColor: 'rgba(0,0,0,0.4)',
+                            }}
+                          >
                             {upg.tag}
                           </span>
-                          <span className="text-[9.5px] text-zinc-500 font-mono">#{idx + 1}</span>
+                          <span className="font-bold text-zinc-100 text-[11px] sm:text-xs truncate">
+                            {upg.name}
+                          </span>
                         </div>
-                        <span
-                          className={`text-[9.5px] sm:text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-xs border ${
-                            isMaxed
-                              ? 'bg-amber-950/60 border-amber-600 text-amber-300'
-                              : 'bg-zinc-900 border-zinc-700 text-zinc-300'
-                          }`}
-                        >
-                          {isMaxed ? 'MAX' : `LVL ${upg.level}/${upg.maxLevel}`}
+
+                        <span className="text-[10px] sm:text-[11px] font-mono text-zinc-300 shrink-0 font-bold">
+                          LVL {upg.level}/{upg.maxLevel}
                         </span>
                       </div>
 
-                      {/* Middle: Title & Output Metric (Descriptions removed as requested) */}
-                      <div className="flex flex-col gap-0.5">
-                        <div className="text-zinc-100 font-bold text-[11.5px] sm:text-xs leading-tight">
-                          {upg.name}
-                        </div>
-                        <div className="text-[10.5px] text-emerald-400 font-mono font-bold">
-                          {upg.id === 'autoFrag'
-                            ? `+${upg.level} Blk${upg.level === 1 ? '' : 's'}/s Write Rate`
-                            : upg.unit}
-                        </div>
+                      {/* Middle Row: Progress Bar & Current Value */}
+                      <div className="flex items-center justify-between gap-1 text-[10px] sm:text-[11px] text-zinc-400">
+                        <span className="font-mono text-emerald-400">
+                          [{getProgressBar(upg.level, upg.maxLevel, 8)}]
+                        </span>
+                        <span className="font-mono text-zinc-200 font-bold">{upg.unit}</span>
                       </div>
 
-                      {/* Bottom Row: Progress & Action Button */}
-                      <div className="pt-1.5 border-t border-zinc-800 flex items-center justify-between gap-1.5">
-                        <div className="flex flex-col font-mono text-[9px] text-zinc-400">
-                          <span className="text-zinc-500">[{getProgressBar(upg.level, upg.maxLevel)}]</span>
-                          {!isMaxed && (
-                            <span className={canAfford ? 'text-emerald-400 font-bold' : 'text-zinc-400'}>
-                              {formatNum(cost)} PTS
-                            </span>
-                          )}
-                        </div>
+                      {/* Description */}
+                      <p className="text-[9.5px] sm:text-[10px] text-zinc-400 leading-tight">
+                        {upg.description}
+                      </p>
 
+                      {/* Bottom Row: Buy Button */}
+                      <div className="flex items-center justify-end pt-1 border-t border-zinc-800/80">
                         <button
                           type="button"
                           disabled={!canAfford}
@@ -324,15 +335,22 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
                             sound.playUpgrade();
                             onPurchaseUpgrade(upg.id);
                           }}
-                          className={`px-2.5 py-1 rounded text-[10px] sm:text-[11px] font-bold border font-mono transition-all duration-150 cursor-pointer ${
-                            isMaxed
-                              ? 'bg-amber-900/30 text-amber-400 border-amber-700/50 cursor-not-allowed'
+                          className={`px-2 py-1 rounded text-[10.5px] sm:text-xs font-bold border cursor-pointer font-mono transition-all flex items-center gap-1.5 ${
+                            isMax
+                              ? 'border-zinc-700 bg-zinc-800 text-zinc-400 cursor-not-allowed'
                               : canAfford
                               ? 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-400 shadow-xs active:scale-95'
-                              : 'bg-zinc-800/80 text-zinc-500 border-zinc-700 cursor-not-allowed'
+                              : 'border-zinc-800 bg-zinc-900/60 text-zinc-500 cursor-not-allowed'
                           }`}
                         >
-                          {isMaxed ? 'MAX' : canAfford ? 'TUNE' : 'LOCK'}
+                          {isMax ? (
+                            <span>MAX LVL ({upg.maxLevel})</span>
+                          ) : (
+                            <>
+                              <span className="text-zinc-300 font-normal">[{idx + 1}]</span>
+                              <span>BUY (-{formatNum(cost)} PTS)</span>
+                            </>
+                          )}
                         </button>
                       </div>
                     </div>
@@ -344,95 +362,130 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
         </div>
 
         {/* ========================================================================= */}
-        {/* SECTION 2: TELEMETRY & IOPS PERFORMANCE (HOTKEY: [2]) */}
+        {/* SECTION 2: CLUSTER LEGEND (MOVED TO SIDEBAR) (HOTKEY: [2]) */}
         {/* ========================================================================= */}
         <div
-          id="accordion-section-telemetry"
-          className="rounded border overflow-hidden transition-all duration-150"
+          id="accordion-section-legend"
+          className="rounded border overflow-hidden transition-all duration-150 flex flex-col shrink-0"
           style={{
-            borderColor: activeSection === 'telemetry' ? theme.accent : theme.cardBorder,
+            borderColor: activeSection === 'legend' ? theme.accent : theme.cardBorder,
             backgroundColor: theme.headerBg,
           }}
         >
           {/* Header */}
           <button
             type="button"
-            onClick={() => toggleSection('telemetry')}
-            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none"
+            onClick={() => toggleSection('legend')}
+            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none shrink-0"
             style={{
-              borderColor: activeSection === 'telemetry' ? theme.cardBorder : 'transparent',
-              backgroundColor: activeSection === 'telemetry' ? 'rgba(0,0,0,0.3)' : undefined,
+              borderColor: activeSection === 'legend' ? theme.cardBorder : 'transparent',
+              backgroundColor: activeSection === 'legend' ? 'rgba(0,0,0,0.3)' : undefined,
             }}
           >
             <div className="flex items-center gap-2">
-              <span className="text-cyan-400 font-black font-mono">
-                {activeSection === 'telemetry' ? '▼' : '▶'}
+              <span className="text-emerald-400 font-black font-mono">
+                {activeSection === 'legend' ? '▼' : '▶'}
               </span>
               <span className="text-zinc-100 font-bold tracking-tight">
-                <span className="text-cyan-400 mr-1">[2]</span>IOPS_&_DRIVE_HEALTH
+                <span className="text-emerald-400 mr-1">[2]</span>CLUSTER_LEGEND
               </span>
             </div>
-            <div className="flex items-center gap-1.5 font-mono text-[10px] sm:text-[11px]">
-              <span className="text-emerald-400 font-bold">{iops.toFixed(1)} IOPS</span>
-              <span className="text-zinc-500">|</span>
-              <span className="text-cyan-300">{sortedPercent.toFixed(0)}% CONTIG</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] sm:text-[11px] px-1.5 py-0.2 rounded bg-black/40 text-cyan-300 border border-zinc-700 font-mono">
+                5 TIERS + BAD
+              </span>
             </div>
           </button>
 
           {/* Body */}
-          {activeSection === 'telemetry' && (
-            <div className="p-2 sm:p-2.5 flex flex-col gap-2.5 bg-black/20">
-              {/* Sparkline Graph */}
-              <div className="p-2 rounded border border-zinc-800 bg-zinc-950/60 flex flex-col gap-1">
-                <div className="flex items-center justify-between text-[10px] sm:text-[11px] text-zinc-300">
-                  <span>I/O THROUGHPUT SPARKLINE</span>
-                  <span className="font-bold text-emerald-400">{iops.toFixed(1)} IOPS</span>
-                </div>
-                <div
-                  className="text-sm tracking-wider font-mono select-none overflow-hidden text-right"
-                  style={{ color: theme.accent }}
-                >
-                  {sparklineString || '                        '}
-                </div>
+          {activeSection === 'legend' && (
+            <div className="p-2 sm:p-2.5 flex flex-col gap-1.5 bg-black/20">
+              <div className="text-[10px] sm:text-[11px] uppercase text-zinc-400 font-bold flex justify-between shrink-0 px-0.5">
+                <span>Target Ordered Sectors</span>
+                <span className="text-zinc-500">Track Alignment</span>
               </div>
 
-              {/* Disk Alignment Gauge */}
-              <div className="flex flex-col gap-1">
-                <div className="flex justify-between text-[10.5px] sm:text-[11.5px]">
-                  <span className="text-zinc-400">ALIGNMENT RATIO:</span>
-                  <span className={fragPercent > 50 ? 'text-rose-400 font-bold' : fragPercent > 20 ? 'text-amber-400 font-bold' : 'text-emerald-400 font-bold'}>
-                    {sortedPercent.toFixed(1)}% SORTED ({fragmentedCount} frag)
+              <div className="grid grid-cols-1 gap-1.5">
+                {Object.values(BLOCK_TIERS)
+                  .sort((a, b) => b.tier - a.tier) // Ordered 5 -> 4 -> 3 -> 2 -> 1
+                  .map((item) => {
+                    const calculatedPoints = Math.round(item.basePoints * multiplier * 10) / 10;
+                    const count = tierDistribution[item.tier] || 0;
+                    return (
+                      <div
+                        key={item.tier}
+                        className="px-2 py-1.5 rounded border flex items-center justify-between text-[11px] sm:text-xs"
+                        style={{
+                          backgroundColor: 'rgba(0,0,0,0.35)',
+                          borderColor: theme.cardBorder,
+                        }}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span
+                            className="font-bold text-sm sm:text-base shrink-0"
+                            style={{ color: theme.tierColors[item.tier] }}
+                          >
+                            {item.char}
+                          </span>
+                          <div className="flex flex-col leading-tight truncate">
+                            <div className="flex items-center gap-1">
+                              <span className="text-zinc-100 font-bold truncate">{item.name}</span>
+                              <span className="text-[9.5px] text-zinc-400">({count} on disk)</span>
+                            </div>
+                            <span className="text-[9.5px] text-zinc-400 truncate">{item.targetZone}</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 font-mono text-[10.5px] sm:text-[11.5px] shrink-0">
+                          <span className="text-emerald-400 font-bold">
+                            {calculatedPoints} PTS
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                {/* Bad Sector Legend Item */}
+                <div
+                  className="px-2 py-1.5 rounded border flex items-center justify-between text-[11px] sm:text-xs"
+                  style={{
+                    backgroundColor: 'rgba(0,0,0,0.35)',
+                    borderColor: 'rgba(239, 68, 68, 0.4)',
+                  }}
+                >
+                  <div className="flex items-center gap-2 truncate">
+                    <span className="font-bold text-sm sm:text-base text-rose-500 animate-pulse shrink-0">
+                      ✖
+                    </span>
+                    <div className="flex flex-col leading-tight truncate">
+                      <div className="flex items-center gap-1">
+                        <span className="text-rose-400 font-bold truncate">BAD_SECTOR (CORRUPT)</span>
+                        <span className="text-[9.5px] text-rose-300">({corruptCount} active)</span>
+                      </div>
+                      <span className="text-[9.5px] text-zinc-400 truncate">Repaired by Autonomous Heads</span>
+                    </div>
+                  </div>
+                  <span className="text-rose-400 font-bold text-[10.5px] sm:text-[11.5px] shrink-0">
+                    +50% BONUS
                   </span>
                 </div>
 
-                <div className="w-full bg-zinc-900 h-2.5 rounded-xs border border-zinc-700 overflow-hidden flex">
-                  <div
-                    className="h-full bg-emerald-500 transition-all duration-200"
-                    style={{ width: `${sortedPercent}%` }}
-                    title={`Optimized contiguous: ${sortedPercent.toFixed(1)}%`}
-                  />
-                  <div
-                    className="h-full bg-amber-500 transition-all duration-200"
-                    style={{ width: `${fragPercent}%` }}
-                    title={`Fragmented: ${fragPercent.toFixed(1)}%`}
-                  />
-                  {corruptCount > 0 && (
-                    <div
-                      className="h-full bg-rose-500 transition-all duration-200 animate-pulse"
-                      style={{ width: `${(corruptCount / (blocks.length || 1)) * 100}%` }}
-                      title={`Corrupted: ${corruptCount} blocks`}
-                    />
-                  )}
-                </div>
-              </div>
-
-              {/* Cumulative Counters */}
-              <div className="pt-1.5 border-t border-zinc-800 flex items-center justify-between text-[10px] sm:text-[11px] text-zinc-300">
-                <div>
-                  DEFRAGGED: <span className="text-zinc-100 font-bold">{(totalBlocksDefragged ?? 0).toLocaleString()}</span>
-                </div>
-                <div>
-                  MANUAL READS: <span className="text-zinc-100 font-bold">{(totalManualClicks ?? 0).toLocaleString()}</span>
+                {/* Free Space */}
+                <div
+                  className="px-2 py-1.5 rounded border flex items-center justify-between text-[11px] sm:text-xs"
+                  style={{
+                    backgroundColor: 'rgba(0,0,0,0.35)',
+                    borderColor: 'rgba(255, 255, 255, 0.08)',
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-zinc-600">_</span>
+                    <div className="flex flex-col leading-tight">
+                      <span className="text-zinc-300 font-bold">FREE_SECTOR (EMPTY)</span>
+                      <span className="text-[9.5px] text-zinc-500">{freeCount} available clusters</span>
+                    </div>
+                  </div>
+                  <span className="text-zinc-500 font-bold text-[10.5px]">0 PTS</span>
                 </div>
               </div>
             </div>
@@ -440,11 +493,89 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
         </div>
 
         {/* ========================================================================= */}
-        {/* SECTION 3: DAEMON & CORRUPTION TUNING (HOTKEY: [3]) */}
+        {/* SECTION 3: EVENT LOGS (MOVED TO SIDEBAR) (HOTKEY: [3]) */}
+        {/* ========================================================================= */}
+        <div
+          id="accordion-section-logs"
+          className="rounded border overflow-hidden transition-all duration-150 flex flex-col shrink-0"
+          style={{
+            borderColor: activeSection === 'logs' ? theme.accent : theme.cardBorder,
+            backgroundColor: theme.headerBg,
+          }}
+        >
+          {/* Header */}
+          <button
+            type="button"
+            onClick={() => toggleSection('logs')}
+            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none shrink-0"
+            style={{
+              borderColor: activeSection === 'logs' ? theme.cardBorder : 'transparent',
+              backgroundColor: activeSection === 'logs' ? 'rgba(0,0,0,0.3)' : undefined,
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400 font-black font-mono">
+                {activeSection === 'logs' ? '▼' : '▶'}
+              </span>
+              <span className="text-zinc-100 font-bold tracking-tight">
+                <span className="text-emerald-400 mr-1">[3]</span>EVENT_LOG
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] sm:text-[11px] px-1.5 py-0.2 rounded bg-black/40 text-emerald-400 border border-zinc-700 font-mono">
+                {logs.length} EVENTS
+              </span>
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  sound.playBeep();
+                  onClearLogs();
+                }}
+                className="text-[10px] text-zinc-400 hover:text-white px-1.5 py-0.2 rounded border border-zinc-700 hover:border-zinc-500 bg-zinc-900 transition-colors cursor-pointer"
+              >
+                CLEAR
+              </span>
+            </div>
+          </button>
+
+          {/* Body */}
+          {activeSection === 'logs' && (
+            <div
+              ref={logScrollRef}
+              className="p-2 sm:p-2.5 overflow-y-auto font-mono text-[11px] sm:text-xs space-y-1.5 custom-scrollbar min-h-[140px] max-h-[260px] bg-black/20"
+            >
+              {logs.length === 0 ? (
+                <div className="text-center text-zinc-500 italic py-4">
+                  No events recorded. Waiting for disk operations...
+                </div>
+              ) : (
+                logs.map((log) => (
+                  <div key={log.id} className="flex items-start gap-1.5 leading-relaxed">
+                    <span className="text-zinc-500 text-[9.5px] sm:text-[10.5px] shrink-0 font-mono">
+                      {log.timestamp}
+                    </span>
+                    <span
+                      className={`text-[9px] font-bold px-1 py-0.2 rounded-xs border shrink-0 ${getBadgeColor(
+                        log.level
+                      )}`}
+                    >
+                      {log.tag}
+                    </span>
+                    <span className="text-zinc-200 break-all text-[10.5px] sm:text-[11.5px]">{log.message}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ========================================================================= */}
+        {/* SECTION 4: DAEMON & WRITE ACTIVITY (HOTKEY: [4]) */}
         {/* ========================================================================= */}
         <div
           id="accordion-section-daemon"
-          className="rounded border overflow-hidden transition-all duration-150"
+          className="rounded border overflow-hidden transition-all duration-150 flex flex-col shrink-0"
           style={{
             borderColor: activeSection === 'daemon' ? theme.accent : theme.cardBorder,
             backgroundColor: theme.headerBg,
@@ -454,7 +585,7 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
           <button
             type="button"
             onClick={() => toggleSection('daemon')}
-            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none"
+            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none shrink-0"
             style={{
               borderColor: activeSection === 'daemon' ? theme.cardBorder : 'transparent',
               backgroundColor: activeSection === 'daemon' ? 'rgba(0,0,0,0.3)' : undefined,
@@ -465,77 +596,89 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
                 {activeSection === 'daemon' ? '▼' : '▶'}
               </span>
               <span className="text-zinc-100 font-bold tracking-tight">
-                <span className="text-amber-400 mr-1">[3]</span>DAEMON_&_CORRUPTION
+                <span className="text-amber-400 mr-1">[4]</span>DAEMON_&_WRITE_INGESTION
               </span>
             </div>
             <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono">
-              <span className={corruptionRate > 0 ? 'text-rose-400 font-bold' : 'text-zinc-400'}>
-                {corruptionRate > 0 ? `GLITCH ${corruptionRate}%` : 'GLITCH OFF'}
+              <span className={autoFragEnabled ? 'text-emerald-400 font-bold' : 'text-zinc-400'}>
+                {autoFragEnabled ? 'WRITE RUNNING' : 'PAUSED'}
               </span>
             </div>
           </button>
 
           {/* Body */}
           {activeSection === 'daemon' && (
-            <div className="p-2 sm:p-2.5 flex flex-col gap-2.5 bg-black/20">
-              {/* Corruption Rate Tuning */}
+            <div className="p-2 sm:p-2.5 flex flex-col gap-2 bg-black/20">
+              {/* Auto-Frag Daemon Switch */}
               <div
                 className="p-2 rounded border flex flex-col gap-1.5"
                 style={{
                   backgroundColor: 'rgba(0,0,0,0.4)',
-                  borderColor: corruptionRate > 0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255,255,255,0.06)',
+                  borderColor: autoFragEnabled ? 'rgba(16, 185, 129, 0.3)' : 'rgba(255,255,255,0.06)',
                 }}
               >
-                <div className="flex items-center justify-between text-[10.5px] sm:text-[11.5px] font-bold">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-zinc-200">
+                    SIMULATED INCOMING FILE WRITES
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      sound.playBeep();
+                      onToggleAutoFrag();
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-all ${
+                      autoFragEnabled
+                        ? 'bg-emerald-600 text-white border-emerald-400'
+                        : 'bg-zinc-800 text-zinc-400 border-zinc-700'
+                    }`}
+                  >
+                    {autoFragEnabled ? 'ACTIVE [ON]' : 'PAUSED [OFF]'}
+                  </button>
+                </div>
+                <p className="text-[10px] text-zinc-400 leading-tight">
+                  Injects fresh fragmented blocks onto drive sectors continuously to simulate background OS filesystem writes.
+                </p>
+              </div>
+
+              {/* Data Corruption Telemetry Status */}
+              <div
+                className="p-2 rounded border flex flex-col gap-1.5"
+                style={{
+                  backgroundColor: 'rgba(0,0,0,0.4)',
+                  borderColor: corruptionRate > 0 ? 'rgba(244, 63, 94, 0.4)' : 'rgba(255,255,255,0.06)',
+                }}
+              >
+                <div className="flex items-center justify-between text-[11px] font-bold">
                   <span className="flex items-center gap-1">
-                    <span className={corruptionRate > 0 ? 'text-rose-400 animate-pulse' : 'text-zinc-400'}>⚠</span>
-                    <span className="text-zinc-200">SECTOR CORRUPTION RATE:</span>
+                    <span className={corruptionRate > 0 ? 'text-rose-400 animate-pulse' : 'text-zinc-400'}>
+                      ⚠
+                    </span>
+                    <span className="text-zinc-200">ACTIVE DATA CORRUPTION:</span>
                   </span>
                   <span className={corruptionRate > 0 ? 'text-rose-400 font-black' : 'text-zinc-400'}>
-                    {corruptionRate}% / SEC {corruptCount > 0 ? `(${corruptCount} BAD)` : ''}
+                    {corruptionRate > 0 ? `LVL ${corruptionRate}/10 (${corruptionRate}% GLITCH)` : '0% (OFF)'}
                   </span>
                 </div>
-
-                <div className="flex items-center gap-2">
-                  <input
-                    type="range"
-                    min="0"
-                    max="10"
-                    step="1"
-                    value={corruptionRate}
-                    onChange={(e) => onChangeCorruptionRate(parseInt(e.target.value, 10) || 0)}
-                    className="flex-1 accent-rose-500 h-1.5 bg-zinc-800 rounded cursor-pointer"
-                  />
-                  <div className="flex items-center gap-1">
-                    {[0, 2, 5, 10].map((rate) => (
-                      <button
-                        key={rate}
-                        onClick={() => onChangeCorruptionRate(rate)}
-                        className={`px-1.5 py-0.5 rounded text-[9.5px] sm:text-[10px] border cursor-pointer font-bold ${
-                          corruptionRate === rate
-                            ? 'bg-rose-600 text-white border-rose-400'
-                            : 'border-zinc-700 text-zinc-300 hover:text-zinc-100'
-                        }`}
-                      >
-                        {rate === 0 ? '0' : `${rate}%`}
-                      </button>
-                    ))}
+                <p className="text-[10px] text-zinc-400 leading-tight">
+                  Controlled by System Tuning Upgrade [1]. Higher levels corrupt more blocks across disk. Bad sectors repaired by heads yield +50% bonus points.
+                </p>
+                {corruptCount > 0 && (
+                  <div className="text-[10px] text-rose-300 font-bold font-mono">
+                    ● {corruptCount} corrupted blocks currently awaiting head repair.
                   </div>
-                </div>
-                <div className="text-[9.5px] text-zinc-400">
-                  Autonomous defrag heads repair bad sectors on sweep, yielding +50% bonus points.
-                </div>
+                )}
               </div>
             </div>
           )}
         </div>
 
         {/* ========================================================================= */}
-        {/* SECTION 4: THREADS & SECTOR ALLOCATION (HOTKEY: [4]) */}
+        {/* SECTION 5: THREADS & ACTIVE HEADS (HOTKEY: [5]) */}
         {/* ========================================================================= */}
         <div
           id="accordion-section-threads"
-          className="rounded border overflow-hidden transition-all duration-150"
+          className="rounded border overflow-hidden transition-all duration-150 flex flex-col shrink-0"
           style={{
             borderColor: activeSection === 'threads' ? theme.accent : theme.cardBorder,
             backgroundColor: theme.headerBg,
@@ -545,7 +688,7 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
           <button
             type="button"
             onClick={() => toggleSection('threads')}
-            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none"
+            className="w-full px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between text-left font-bold text-xs sm:text-[13px] cursor-pointer hover:brightness-110 transition-colors border-b select-none shrink-0"
             style={{
               borderColor: activeSection === 'threads' ? theme.cardBorder : 'transparent',
               backgroundColor: activeSection === 'threads' ? 'rgba(0,0,0,0.3)' : undefined,
@@ -556,7 +699,7 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
                 {activeSection === 'threads' ? '▼' : '▶'}
               </span>
               <span className="text-zinc-100 font-bold tracking-tight">
-                <span className="text-purple-400 mr-1">[4]</span>THREADS_&_SECTOR_MAP
+                <span className="text-purple-400 mr-1">[5]</span>THREADS_&_HEADS_MONITOR
               </span>
             </div>
             <div className="flex items-center gap-1 text-[10px] sm:text-[11px] font-mono text-zinc-400">
@@ -566,33 +709,7 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
 
           {/* Body */}
           {activeSection === 'threads' && (
-            <div className="p-2 sm:p-2.5 flex flex-col gap-2.5 bg-black/20">
-              {/* Sector Data Tier Distribution */}
-              <div className="flex flex-col gap-1">
-                <div className="text-[9.5px] sm:text-[10.5px] text-zinc-400 uppercase font-bold">
-                  Cluster Types (1 - 5 Points Yield)
-                </div>
-                <div className="grid grid-cols-5 gap-1 text-[9.5px] sm:text-[10.5px]">
-                  {[1, 2, 3, 4, 5].map((tier) => {
-                    const conf = BLOCK_TIERS[tier];
-                    const count = tierDistribution[tier] || 0;
-                    return (
-                      <div
-                        key={tier}
-                        className="p-1 rounded border border-zinc-800 bg-zinc-950/60 flex flex-col items-center justify-center text-center"
-                      >
-                        <div className="flex items-center gap-0.5 font-bold" style={{ color: theme.tierColors[tier as 1|2|3|4|5] }}>
-                          <span>{conf.char}</span>
-                          <span>{conf.basePoints}p</span>
-                        </div>
-                        <div className="text-[9px] text-zinc-300 font-mono">{count}</div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* Active Defrag Read/Write Heads */}
+            <div className="p-2 sm:p-2.5 flex flex-col gap-2 bg-black/20">
               <div className="flex flex-col gap-1">
                 <div className="text-[9.5px] sm:text-[10.5px] text-zinc-400 uppercase font-bold flex justify-between">
                   <span>Active Defrag Heads</span>
@@ -613,7 +730,9 @@ export const LazyDockerSidebar: React.FC<LazyDockerSidebarProps> = ({
                       </div>
                       <div className="flex items-center gap-1.5 font-mono text-[9px] sm:text-[10px]">
                         <span className="text-zinc-400">0x{head.position.toString(16).padStart(3, '0').toUpperCase()}</span>
-                        <span className="text-emerald-400 font-bold">[{head.status}]</span>
+                        <span className="text-emerald-400 font-bold">
+                          [{head.status}]
+                        </span>
                       </div>
                     </div>
                   ))}

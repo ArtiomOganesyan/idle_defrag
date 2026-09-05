@@ -10,6 +10,7 @@ interface DefragGridProps {
   onManualCycle: () => void;
   autoDefragActive: boolean;
   onToggleAutoDefrag: () => void;
+  isPomodoroActive?: boolean;
 }
 
 export const DefragGrid: React.FC<DefragGridProps> = ({
@@ -19,6 +20,7 @@ export const DefragGrid: React.FC<DefragGridProps> = ({
   onManualCycle,
   autoDefragActive,
   onToggleAutoDefrag,
+  isPomodoroActive = true,
 }) => {
   const [density, setDensity] = useState<'compact' | 'normal' | 'relaxed'>('normal');
 
@@ -234,29 +236,53 @@ export const DefragGrid: React.FC<DefragGridProps> = ({
           <button
             id="btn-manual-step-head"
             onClick={onManualCycle}
-            className="px-2 sm:px-2.5 py-1 rounded border font-bold cursor-pointer transition-all hover:brightness-125 active:scale-95 flex items-center gap-1 shadow-sm"
+            title={isPomodoroActive ? 'Manual sector defragmentation cycle [SPACE]' : 'Defragmentation is inhibited while Pomodoro is inactive'}
+            className={`px-2 sm:px-2.5 py-1 rounded border font-bold cursor-pointer transition-all flex items-center gap-1 shadow-sm ${
+              isPomodoroActive
+                ? 'hover:brightness-125 active:scale-95 text-black'
+                : 'bg-zinc-800/80 border-zinc-700 text-zinc-400 hover:text-zinc-200'
+            }`}
             style={{
-              backgroundColor: theme.accent,
-              color: '#000000',
-              borderColor: theme.accent,
+              backgroundColor: isPomodoroActive ? theme.accent : undefined,
+              borderColor: isPomodoroActive ? theme.accent : undefined,
             }}
           >
             <span>[SPACE]</span>
             <span className="hidden xs:inline">DEFRAG</span>
             <span className="xs:hidden">STEP</span>
+            {!isPomodoroActive && <span className="text-[9px] text-amber-400 font-normal">[POMO OFF]</span>}
           </button>
 
           <button
             id="btn-toggle-auto-defrag"
             onClick={onToggleAutoDefrag}
             className={`px-2 py-1 rounded border font-mono font-bold cursor-pointer transition-colors ${
-              autoDefragActive
+              autoDefragActive && isPomodoroActive
                 ? 'bg-emerald-950/80 text-emerald-300 border-emerald-500'
+                : autoDefragActive && !isPomodoroActive
+                ? 'bg-amber-950/80 text-amber-300 border-amber-600'
                 : 'bg-zinc-800 text-zinc-400 border-zinc-600'
             }`}
           >
-            <span>[A] AUTO: {autoDefragActive ? 'ON' : 'OFF'}</span>
+            <span>
+              [A] AUTO:{' '}
+              {autoDefragActive
+                ? isPomodoroActive
+                  ? 'ON'
+                  : 'STANDBY (POMO)'
+                : 'OFF'}
+            </span>
           </button>
+
+          <span
+            className={`hidden md:inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] border ${
+              isPomodoroActive
+                ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-400 animate-pulse'
+                : 'bg-amber-950/40 border-amber-600/40 text-amber-300'
+            }`}
+          >
+            ● POMO: {isPomodoroActive ? 'ACTIVE' : 'IDLE'}
+          </span>
         </div>
 
         <div className="flex items-center gap-2 sm:gap-3 text-[10px] sm:text-[11px] opacity-90">

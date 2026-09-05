@@ -20,6 +20,10 @@ interface HeaderBarProps {
   autoFragEnabled: boolean;
   onToggleAutoFrag: () => void;
   corruptionRate: number;
+  pomodoroTimeLeft?: number;
+  isPomodoroActive?: boolean;
+  pomodoroIsRunning?: boolean;
+  onOpenPomodoro?: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -40,6 +44,10 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   autoFragEnabled,
   onToggleAutoFrag,
   corruptionRate,
+  pomodoroTimeLeft = 1500,
+  isPomodoroActive = false,
+  pomodoroIsRunning = false,
+  onOpenPomodoro,
 }) => {
   const [timeStr, setTimeStr] = useState('');
   const [uptimeSec, setUptimeSec] = useState(0);
@@ -130,6 +138,36 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           <span>PRESTIGE:</span>
           <span>{formatPoints} PTS</span>
           <span className="text-emerald-400 hidden sm:inline">(+{(formatPoints * 1.5).toFixed(1)}%)</span>
+        </button>
+
+        {/* Pomodoro Focus Status Pill */}
+        <button
+          id="btn-header-pomodoro"
+          type="button"
+          onClick={onOpenPomodoro}
+          title="Pomodoro Focus Protocol [Hotkey: P to toggle, 2 to switch tab]"
+          className={`flex items-center gap-1.5 px-2 py-0.5 sm:py-1 rounded border font-mono font-bold text-[10px] sm:text-[11px] cursor-pointer transition-all shadow-xs ${
+            isPomodoroActive
+              ? 'bg-emerald-950/80 border-emerald-500 text-emerald-300 shadow-[0_0_8px_rgba(16,185,129,0.25)] hover:bg-emerald-900'
+              : pomodoroIsRunning
+              ? 'bg-cyan-950/80 border-cyan-500 text-cyan-300 hover:bg-cyan-900'
+              : 'border-zinc-700 bg-zinc-900/80 text-zinc-300 hover:text-white hover:border-zinc-500'
+          }`}
+        >
+          <span>{isPomodoroActive ? '⚡' : '⏱'}</span>
+          <span>POMO:</span>
+          <span className="font-extrabold text-white">
+            {Math.floor(pomodoroTimeLeft / 60)}:{String(pomodoroTimeLeft % 60).padStart(2, '0')}
+          </span>
+          <span
+            className={`text-[9px] px-1 py-0.2 rounded ${
+              isPomodoroActive
+                ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/40'
+                : 'bg-zinc-800 text-zinc-400'
+            }`}
+          >
+            {isPomodoroActive ? 'DEFRAG ON' : pomodoroIsRunning ? 'BREAK' : 'OFF'}
+          </span>
         </button>
       </div>
 
